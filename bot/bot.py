@@ -36,6 +36,7 @@ class Bot(ActivityHandler):
         self.conversation_history_accessor = self.conversation_state.create_property("ConversationHistory")
         self.dialogue_state_history_accessor = self.conversation_state.create_property("DialogueStateHistory")
         self.slot_filling_accessor = self.conversation_state.create_property("SlotFilling")
+        self.processed_messages_accessor = self.conversation_state.create_property("ProcessedMessages")
 
         self.dialogue_start = DialogueStart()
         self.message_processing = MessageProcessing()
@@ -138,7 +139,41 @@ class Bot(ActivityHandler):
         if slot_filling is None:
             slot_filling = {}
 
-        return slot_filling       
+        return slot_filling 
+    
+    async def is_duplicate_message(self, turn_context: TurnContext) -> bool:
+        """
+        Checks for an incoming message by the user, if this message has already been processed.
+        - If the message has already been processed, returns True
+        - If the message has not been processed, returns False
+
+        Args: 
+            turn_context (TurnContext): The information about the current activity.
+
+        Returns:
+            bool: Whether the message has already been processed. 
+        """
+
+        # Receive message key from channel data
+        channel_data = turn_context.activity.channel_data if turn_context.activity.channel_data else {}
+        message_key = channel_data.get("messageKey", None)
+
+        # If no message_key value received: return False
+        if message_key is None: 
+            return False
+
+        # If message_key is contained in the processed message_keys: return True
+        processed_messages = await self.processed_messages_accessor.get(turn_context)
+        if processed_messages is None:
+            processed_messages = []
+        if message_key in processed_messages:
+            return True
+
+        # If message_key is not contained in the processed message_keys: 
+        # store the message_key in the conversation_state and return False
+        processed_messages.append(message_key)
+        await self.processed_messages_accessor.set(turn_context, processed_messages)
+        return False
     
     async def on_members_added_activity(self, members_added: ChannelAccount, turn_context: TurnContext):
         """
@@ -196,6 +231,7 @@ class Bot(ActivityHandler):
         Processes a user message. This function is executed each time the user 
         sends a message to the chatbot. 
         - Retrieves the conversation state variables of the conversation.
+        - Checks whether the message is a duplicate. 
         - Receives the user message.
         - Executes the process_message function from the MessageProcessing 
         class to determine the bot response, the new dialogue state, the 
@@ -209,6 +245,10 @@ class Bot(ActivityHandler):
             turn_context (TurnContext): The information about the current 
             activity.
         """
+
+        # Check if the message is a duplicate; if this is the case, stop the function
+        if await self.is_duplicate_message(turn_context):
+            return
 
         # Retrieve conversation state variables
         treatment_group = await self.get_treatment_state(turn_context)
